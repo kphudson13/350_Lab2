@@ -1,0 +1,292 @@
+---
+title: "Lab 2: Precipitation & Streamflow Relationships"
+author: "Kyle Hudson"
+id: "1584612"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r Packages, include=FALSE}
+library(tidyverse) #for bloody everything
+library(ggeffects) 
+```
+
+```{r Input Data, include=FALSE}
+HydroData <- read.csv("Lab2Data.csv",
+                      header = TRUE,
+                      stringsAsFactors = TRUE)
+
+```
+
+Part one
+```{r Precipitation Summary, echo=FALSE, message=FALSE, warning=FALSE}
+#A table of monthly precipitation
+PbyMonth <-
+  HydroData %>%
+  group_by(Year, NumMon) %>% 
+  summarise(Psum = sum(TotalPrecipitation.mm.d., na.rm=T)) %>% #get the sum of each month
+  pivot_wider(names_from = NumMon, values_from = Psum) %>% #pivot to make each month a column
+  ungroup(.) %>% #undo the grouping now
+  mutate(AnnualSum = rowSums(.[2:13])) %>% #get the annual sum in a new column
+  mutate(Year = as.character(Year))
+
+#same table, with the mean and SE rows added
+Precip_Table <-
+  PbyMonth %>% 
+  bind_rows(list(summarise_all(., 
+                               ~(if( is.numeric(.))
+                                 mean(.) 
+                                 else 
+                                   "Mean Monthly P (mm)"))), 
+            (summarise_all(., 
+                           ~(if( 
+                             is.numeric(.))
+                             sd(.)/sqrt(length(.)) 
+                             else 
+                               "Standard Error")))) %>% #add a standard error row
+  mutate(across((c(2:14)), round, 1)) #remember the bracket pattern, it's a pain
+
+
+Precip_TTest <- #two-sided is default
+  t.test(PbyMonth$AnnualSum, 
+         conf.level = 0.95)
+
+```
+
+```{r Runoff Summary, include=FALSE}
+#A table of monthly runoff 
+QbyMonth <-
+  HydroData %>%
+  group_by(Year, NumMon) %>%
+  summarise(Qsum = sum(MeanQmm.day, na.rm=T)) %>% #get the sum of each month
+  pivot_wider(names_from = NumMon, values_from = Qsum) %>% #pivot to make each month a column
+  ungroup(.) %>% #undo the grouping now
+  mutate(AnnualSum = rowSums(.[2:13])) %>% #get the annual sum in a new column
+  mutate(Year = as.character(Year))
+
+#same table, with the mean and SE rows added
+Runoff_Table <-
+  QbyMonth %>% #turn year to a character
+  bind_rows(list(summarise_all(., 
+                               ~(if(
+                                 is.numeric(.))
+                                 mean(.) 
+                               else 
+                                 "Mean Monthly Q (mm)"))), #add a mean row
+                 (summarise_all(., 
+                               ~(if(
+                                 is.numeric(.))
+                                 sd(.)/sqrt(length(.)) 
+                               else 
+                                 "Standard Error")))) %>% #add a standard error row
+    mutate(across((c(2:14)), round, 1)) #remember the bracket pattern, it's a pain
+
+Runoff_TTest <- #two-sided is default
+  t.test(QbyMonth$AnnualSum, 
+         conf.level = 0.95)
+
+```
+
+```{r Manipulate dataframes, include=FALSE}
+
+#Create a dataframe with both precipitation and runoff summed annually
+YearData <-
+  HydroData %>%
+  group_by(Year) %>%
+  summarise(RainSum = sum(TotalRainfall.mm.d.),
+            SnowSum = sum(TotalSnowfall.mm.deqv..),
+            PrecipSum = sum(TotalPrecipitation.mm.d., na.rm=T),
+            RunoffSum = sum(MeanQmm.day)) %>%
+  mutate(RainPer = (100*RainSum/PrecipSum),
+         SnowPer = (100*SnowSum/PrecipSum))
+
+#Create a dataframe with both variables monthly, including standard errors 
+MonthData <- 
+  t(Precip_Table[c(31,32), ]) %>% #t is transpose
+  cbind(t(Runoff_Table[c(31,32), ])) %>% 
+  as.data.frame() %>% #default here is matrix
+  `colnames<-`(c("Precipitation",
+                 "stderrP",
+                 "Runoff",
+                 "stderrQ")) %>% #set first row to col. names
+  .[-c(1,14), ] %>% #removes extra rows easily
+  mutate(Month = as.numeric(row.names(.))) %>%
+  mutate_all(., function(x) as.numeric(x)) #convert all columns to numeric 
+
+```
+
+```{r Plots, echo=FALSE}
+YearPlot <-
+  ggplot(data = YearData,
+         aes(x = Year)) +
+  geom_point(aes(y = PrecipSum, color = "Precipitation")) +
+  geom_point(aes(y = RunoffSum, color = "Run off")) +
+  geom_line(aes(y = PrecipSum, color = "Precipitation", group = 1)) +
+  geom_line(aes(y = RunoffSum, color = "Run off", group = 1)) +
+  labs(y = "Precipitation or Runoff (mm/year)",
+       color = " ",
+       title = "Fig. 1 Precipitation and Run Off Plotted Anually \nElbow River Watershed, AB (1993-2022)") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1,
+                                   colour = "black"), #angling and right justified x labels
+        axis.text.y = element_text(colour = "black"),
+        axis.line = element_line(linewidth = 0.8)) + #making the axis thicker
+  scale_colour_manual(values = c("blue4", "chocolate4")) + #Force colours
+  scale_y_continuous(breaks = seq(0,1200,100)) + #best way to set tickmarks 
+  scale_x_continuous(breaks = seq(1993,2022,1))
+
+YearPlot
+
+MonthPlot <-
+  ggplot(data = MonthData,
+         aes(x = Month)) +
+  geom_point(aes(y = Precipitation, color = "Precipitation")) +
+  geom_point(aes(y = Runoff, color = "Run off")) +
+  geom_errorbar(aes(ymin = Precipitation - stderrP, 
+                    ymax = Precipitation + stderrP),
+                width=.2) +
+  geom_line(aes(y = Precipitation, color = "Precipitation", group = 1)) +
+  geom_errorbar(aes(ymin = Runoff - stderrQ,
+                    ymax = Runoff + stderrQ),
+                width=.3) +
+  geom_line(aes(y = Runoff, color = "Run off", group = 1)) +
+  labs(y = "Precipitation or Runoff (mm/month)",
+       color = " ",
+       title = "Fig. 2 Precipitation and Run Off Plotted Monthly \nElbow River Watershed, AB (1993-2022)") +
+  theme_classic() +
+  theme(axis.text.x = element_text(colour = "black"), #angling and right justified x labels
+        axis.text.y = element_text(colour = "black"),
+        axis.line = element_line(linewidth = 0.8)) + #making the axis thicker
+  scale_colour_manual(values = c("blue4", "chocolate4")) + #Force colours
+  scale_y_continuous(breaks = seq(0,140,20)) + #best way to set tickmarks
+  scale_x_continuous(breaks = seq(1,12,1))
+
+MonthPlot
+
+```
+
+Part two
+```{r Linear Models, include=FALSE}
+
+RainLM <-
+  lm(formula = (RunoffSum ~ RainSum), 
+     data = YearData)
+
+RainLM_Summary <- summary(RainLM)
+
+RainLM_Summary
+
+SnowLM <- 
+  lm(formula = (RunoffSum ~ SnowSum), 
+     data = YearData)
+
+SnowLM_Summary <- summary(SnowLM)
+
+SnowLM_Summary
+
+```
+
+```{r Regression Plots, message=FALSE, warning=FALSE, echo=FALSE}
+
+
+RainRegression <- 
+  ggplot(data = YearData,
+         aes(x = RainSum, y = RunoffSum)) +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              colour = "deepskyblue",
+              linewidth = 0.8) +
+  geom_point(colour = "blue4",
+             size = 2) +
+  theme_classic() +
+  theme(axis.text.x = element_text(colour = "black"), #angling and right justified x labels
+        axis.text.y = element_text(colour = "black"),
+        axis.line = element_line(linewidth = 0.8)) +
+  labs(y = "Runoff (mm/year)",
+       x = "Rain (mm/year)",
+       title = "Fig. 3 Annual Rain vs. Runoff \nElbow River Watershed, AB (1993-2022)") +
+  scale_x_continuous(breaks = seq(0,1000,100)) +
+  scale_y_continuous(breaks = seq(0,400,50)) +
+  geom_text(x = 300, y = 400, label = "Y = 58.5 + 0.41X \nR\u00B2 = 0.57 \np < 0.01")
+
+RainRegression
+
+SnowRegression <- 
+  ggplot(data = YearData,
+         aes(x = SnowSum, y = RunoffSum)) +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              colour = "deepskyblue",
+              linewidth = 0.8) +
+  geom_point(colour = "blue4",
+             size = 2) +
+  theme_classic() +
+  theme(axis.text.x = element_text(colour = "black"), #angling and right justified x labels
+        axis.text.y = element_text(colour = "black"),
+        axis.line = element_line(linewidth = 0.8)) +
+  labs(y = "Runoff (mm/year)",
+       x = "Snow (mm/year)",
+       title = "Fig. 4 Annual Snow vs. Runoff \nElbow River Watershed, AB (1993-2022)") +
+  scale_x_continuous(breaks = seq(0,400,50)) +
+  scale_y_continuous(breaks = seq(0,400,50)) + 
+  geom_text(x = 80, y = 400, label = "Y = 226.5 + 0.17X \nR\u00B2 = 0.021 \np < 0.44")
+
+SnowRegression
+```
+
+Question 1) Precipitation is more variable, both the Variance and
+Standard Error are higher for this variable. This could be from
+groundwater storage acting as a buffer, as well as evapotanspiration
+rates increasing with increasing precipitation.
+
+Question 2) 
+$$ 
+P = ET + Q \\ 636.5 = ET + -253.5 \\ ET = 383 mm/year
+$$
+
+Question 3) 
+A) 
+$$ 
+Y = 58.05 + 0.413(X) \\ Y = 58.05 + 0.413(473.2) \\ Y = 253.5 mm/year
+$$
+
+B)
+$$ 
+Y = 58.05 + 0.413(X) \\ Y = 58.05 + 0.413(50) \\ Y = 78.7 mm/year
+$$
+
+C)  
+
+The value for part A (473 mm annually) is well within the range of data used to
+build the model, while the part B value (50 mm annually) is extrapolated outside 
+the range of data used. Because of the possibility for non-linearity of the 
+observed values, the predicted regression should not be used to estimate 
+fitted values outside the range of the measured data.
+
+Question 4) 
+A) 
+These data did show a positive response between
+annual rainfall and run off (R2 = 0.57, F = 37.771,28 , p = \<0.01),
+contrarily there was no meaningful relationship between annual snowfall
+and runoff (R2 = 0.02, F = 0.44481, 28, p = 0.45). The R2 value is a
+measure of vertical or response variability from the fitted line to the
+observed data, in this context it is a measure of the amount of variance
+in Runoff that can be explained by either the rain or snowfall of that
+year. The probability statistic, p, tells us the probability that the
+response in the outcome is not a product of chance but instead there is
+a significant slope, $\beta$, in the regression model. In this context a
+small p-value would mean that annual precipitation is likely a factor in
+the amount of run off.
+
+B)
+The above model does suggest that snowfall is unimportant to annual
+runoff. This lack of correlation could be due to oversimplification in
+building the model, snowfall falls over more than one calendar year
+while it generally melts in a single spring. This mismatch of timing
+would misplace late-year snowfall into the current year despite the
+runoff it generates being formed in the following calendar year.
